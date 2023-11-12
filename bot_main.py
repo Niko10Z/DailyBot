@@ -1,5 +1,6 @@
 import telebot
 import config
+import const
 import re
 import sqlalchemy
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -7,7 +8,7 @@ from calendar import monthrange
 from datetime import date, datetime, timedelta
 from typing import Tuple
 
-BOT_STATE = config.BOT_MODES.listen
+BOT_STATE = const.BOT_MODES.listen
 task_dict = {}
 
 bot = telebot.TeleBot(token=config.TOKEN)
@@ -128,7 +129,7 @@ def command_help(message: telebot.types.Message) -> None:
 @bot.message_handler(commands=['add'])
 def command_add(message):
     global BOT_STATE
-    BOT_STATE = config.BOT_MODES.add_task
+    BOT_STATE = const.BOT_MODES.add_task
     bot.send_message(message.chat.id, 'Enter title of task')
 
 
@@ -153,7 +154,7 @@ def command_show(message):
 @bot.message_handler(content_types=['text'])
 def mess_listener(message):
     global BOT_STATE
-    if BOT_STATE == config.BOT_MODES.add_task:
+    if BOT_STATE == const.BOT_MODES.add_task:
         if 'title' not in task_dict:
             task_dict['title'] = message.text
             bot.send_message(message.chat.id, 'Enter date (dd-mm-yyyy) of task')
@@ -164,7 +165,7 @@ def mess_listener(message):
             task_dict['text'] = message.text
             add_task(task_dict['title'], task_dict['date'], task_dict['text'], message.from_user.id)
             task_dict.clear()
-            BOT_STATE = config.BOT_MODES.listen
+            BOT_STATE = const.BOT_MODES.listen
             bot.send_message(message.chat.id, 'Task added')
     else:
         bot.send_message(message.chat.id, "Can't understand. Use /help to see command pool")
