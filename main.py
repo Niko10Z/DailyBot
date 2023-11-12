@@ -1,0 +1,225 @@
+import random
+from calendar import monthrange
+from datetime import date, datetime, timedelta
+from typing import Tuple
+from dateutil.relativedelta import *
+import re
+import sqlalchemy
+from sqlalchemy.orm import declarative_base, sessionmaker
+
+
+# engine = sqlalchemy.create_engine("sqlite:///:memory:", echo=True)
+engine = sqlalchemy.create_engine("sqlite:///bot_mem.sqlite", echo=True)
+Base = declarative_base()
+Session = sessionmaker(bind=engine)
+
+
+class DailyRoutine(Base):
+    __tablename__ = "daily_routine"
+
+    id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
+    user_id = sqlalchemy.Column(sqlalchemy.Integer)
+    task_title = sqlalchemy.Column(sqlalchemy.String)
+    task_date = sqlalchemy.Column(sqlalchemy.Date)
+    task_text = sqlalchemy.Column(sqlalchemy.String)
+    rank = sqlalchemy.Column(sqlalchemy.SmallInteger, default=0)
+    is_done = sqlalchemy.Column(sqlalchemy.Boolean, default=False)
+
+
+Base.metadata.create_all(engine)
+
+
+def show_help() -> None:
+    HELP = """
+    help - напечатать справку по программе.
+    add - добавить задачу в список.
+    show user_id --on_date - напечатать все добавленные задачи.
+    done - отметить выполнение задачи
+    exit - выход из программы.
+    """
+    print(HELP)
+
+
+def show_tasks(user_tasks: dict = {}, on_date: date = None) -> None:
+    if on_date:
+        tasks_text = f'{on_date.strftime("%d-%m-%Y")}\n'
+        tasks_text += '\n'.join(f'\t-{elem[0]}({elem[1]})' for elem in user_tasks[on_date])
+    else:
+        tasks_text = ''
+        for key, value in user_tasks.items():
+            tasks_text += f'\n{key.strftime("%d-%m-%Y")}\n'
+            tasks_text += '\n'.join(f'\t-{elem[0]}({elem[1]})' for elem in value)
+    print(tasks_text)
+
+
+def show_routine(user_id: int=None, on_date: date = None, till_date: date = None) -> None:
+    if not user_id:
+        raise ValueError('User ID must be int')
+    with Session() as session:
+        if on_date:
+            if till_date:
+                query_set = session.query(DailyRoutine).filter(DailyRoutine.user_id == user_id,
+                                                               DailyRoutine.task_date >= on_date,
+                                                               DailyRoutine.task_date <= till_date).order_by(DailyRoutine.task_date,
+                                                                                                             DailyRoutine.rank,
+                                                                                                             DailyRoutine.id)
+            else:
+                query_set = session.query(DailyRoutine).filter_by(user_id=user_id,
+                                                                  task_date=on_date).order_by(DailyRoutine.rank,
+                                                                                              DailyRoutine.id)
+        else:
+            query_set = session.query(DailyRoutine).filter_by(user_id=user_id).order_by(DailyRoutine.task_date,
+                                                                                        DailyRoutine.rank,
+                                                                                        DailyRoutine.id)
+        tasks_text = ''
+        tmp_date = None
+        for elem in query_set:
+            if elem.task_date != tmp_date:
+                tmp_date = elem.task_date
+                tasks_text += f'\n{elem.task_date.strftime("%d-%m-%Y")}\n'
+            tasks_text += f'\t-{elem.task_title}({elem.task_text})\n'
+    print(tasks_text)
+
+
+def add_task(task_title: str, task_date: date, task_text: str, user_id: int = random.randint(1, 5)) -> None:
+    if task_date in tasks:
+        tasks[task_date].append((task_title, task_text))
+    else:
+        tasks[task_date] = [(task_title, task_text)]
+    with Session() as session:
+        session.add(DailyRoutine(user_id=user_id, task_title=task_title, task_date=task_date, task_text=task_text))
+        session.commit()
+    print(tasks)
+
+
+def get_period(date_str: str) -> Tuple[date, date]:
+    now = datetime.today().date()
+    period_words = {
+        'day': lambda: (now, now),
+        'week': lambda: (now - timedelta(days=now.weekday()), now + timedelta(days=7 - now.weekday() - 1)),
+        'month': lambda: (date(now.year, now.month, 1), date(now.year, now.month, monthrange(now.year, now.month)[1])),
+        'year': lambda: (date(now.year, 1, 1), date(now.year, 12, 31)),
+    }
+    if date_str in period_words:
+        return period_words[date_str]()
+    else:
+        raise ValueError('Unknown period name')
+
+
+def convert_date(date_str: str) -> date:
+    day_words = {
+        'now': lambda : datetime.today().date(),
+        'today': lambda : datetime.today().date(),
+        'сегодня': lambda: datetime.today().date(),
+        'tomorrow': lambda: datetime.today().date() + timedelta(days=1),
+        'завтра': lambda: datetime.today().date() + timedelta(days=1),
+        'послезавтра': lambda: datetime.today().date() + timedelta(days=2),
+    }
+    local_date_str = date_str.lower()
+    if local_date_str in day_words:
+        return day_words[local_date_str]()
+    elif re.match(r'^[0123]{0,1}\d[\.\-/\\\_][01]{0,1}\d[\.\-/\\\_]\d{1,4}$', local_date_str):
+        local_date_str = re.sub(r'[\-/\\]', '.', local_date_str)
+        try:
+            return datetime.strptime(local_date_str, '%d.%m.%Y').date()
+        except ValueError:
+            raise ValueError('Wrong date string format')
+    else:
+        raise ValueError('Unconvertable date string')
+
+
+tasks = {}
+
+while True:
+    command = input("Введите команду: ")
+    command, *args = command.split()
+    if command == "help":
+        show_help()
+    elif command == "show":
+        try:
+            try:
+                user_id = int(args[0])
+            except IndexError:
+                raise ValueError('User ID must be int')
+            try:
+                if args[1] in ['day', 'week', 'month', 'year']:
+                    on_date, till_date = get_period(args[1])
+                else:
+                    on_date = convert_date(args[1])
+                    till_date = None
+            except IndexError:
+                on_date = None
+                till_date = None
+            show_routine(user_id, on_date, till_date)
+        except ValueError:
+            print('Нарушен формат команды, повторие ввод')
+            show_help()
+    elif command == "add":
+        task_title = input("Введите название задачи: ")
+        task_date = input("Введите дату задачи: ")
+        task_text = input("Введите действие задачи: ")
+        add_task(task_title, convert_date(task_date), task_text)
+    elif command == "exit":
+        print('Спасибо за использование! До свидания!')
+        break
+    else:
+        print("Неизвестная команда. Введите одну из доступных")
+        show_help()
+
+
+'''import random
+        
+HELP = """
+help - напечатать справку по программе.
+add - добавить задачу в список (название задачи запрашиваем у пользователя).
+show - напечатать все добавленные задачи.
+random - добавлять случайную задачу на дату Сегодня"""
+
+RANDOM_TASKS = ["Записаться на курс в Нетологию", "Написать Гвидо письмо", "Покормить кошку", "Помыть машину"]
+
+tasks = {
+
+}
+
+# Сегодня, Завтра, 31.12 ...
+# [Задача1, Задача2, Задача3]
+# Дата -> [Задача1, Задача2, Задача3]
+
+
+run = True
+
+def add_todo(date, task):
+  if date in tasks:
+      # Дата есть в словаре
+      # Добавляем в список задачу
+      tasks[date].append(task)
+  else:
+      # Даты в словаре нет
+      # Создаем запись с ключом date
+      tasks[date] = []
+      tasks[date].append(task)
+  print("Задача ", task, " добавлена на дату ", date)
+
+while run:
+  command = input("Введите команду: ")
+  if command == "help":
+    print(HELP)
+  elif command == "show":
+    date = input("Введите дату для отображения списка задач: ")
+    if date in tasks:
+      for task in tasks[date]:
+        print('- ', task)
+    else:
+      print("Такой даты нет")
+  elif command == "add":
+    date = input("Введите дату для добавления задачи: ")
+    task = input("Введите название задачи: ")
+    add_todo(date, task)
+  elif command == "random":
+    task = random.choice(RANDOM_TASKS)
+    add_todo("Сегодня", task)
+  else: 
+    print("Неизвестная команда")
+    break
+
+print("До свидания!")'''
